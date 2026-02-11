@@ -117,46 +117,7 @@ python beep_cleaner.py audio.flac --dry-run -v
 python beep_cleaner.py audio.ogg --visualize --viz-output comparison.png
 ```
 
-## How It Works
-
-### Detection Pipeline
-
-1. **STFT Analysis** — Computes a high-resolution Short-Time Fourier Transform (4096-point FFT, 128-sample hop) for precise time-frequency localization.
-
-2. **Frame Scoring** — For each time frame, computes:
-   - **Peakiness**: ratio of peak magnitude to median magnitude in the target frequency band. Pure tones produce extremely high peakiness (>10,000×).
-   - **Spectral purity**: fraction of total energy concentrated in ±3 frequency bins around the peak. A perfect sine wave has purity ≈ 1.0.
-
-3. **Candidate Grouping** — Frames exceeding both peakiness and purity thresholds are grouped into contiguous segments. Segments outside the configured duration range are discarded.
-
-4. **Beep vs Speech Discrimination** — Each candidate segment is filtered by multiple criteria to reject speech and musical content:
-   - **Energy ratio**: beeps have extreme peak-to-median energy ratios (>50,000× for typical beeps vs <25,000× for speech). Configurable via `--min-energy-ratio`.
-   - **Frequency stability**: beeps are constant-frequency; speech formants drift. Candidates with frequency variation exceeding `max_freq_variation_hz` are rejected.
-   - **Onset sharpness**: beeps have abrupt onset (energy jumps >10× in a few frames) vs gradual speech transitions.
-
-5. **Confidence Scoring** — Each candidate is scored based on weighted combination of purity (25%), energy ratio (30%), peakiness (15%), onset sharpness (15%), frequency stability (10%), and duration (5%).
-
-6. **Harmonic Detection** — For each confirmed beep, scans for harmonics (2nd through 8th) by checking energy at integer multiples of the fundamental frequency.
-
-### Removal Pipeline
-
-1. **Cascaded Notch Filters** — IIR notch filters (scipy `iirnotch`) at the beep frequency and each harmonic, applied with multiple Q factors (bandwidth settings) across multiple passes. This provides deep, narrow-band suppression.
-
-2. **STFT Spectral Suppression** — Additional frequency-domain processing zeros out ±40 Hz bands around each target frequency, catching any residual energy the notch filters miss.
-
-3. **Crossfade Blending** — The filtered region is blended with the original audio using a smooth crossfade envelope at the boundaries (default 5 ms), preventing click artifacts.
-
-### Visualization
-
-When `--visualize` is used, generates a multi-panel PNG showing:
-- Full spectrograms (original vs. cleaned)
-- Zoomed spectrograms around each detected beep
-- Frequency spectrum overlay at beep timestamps
-- Difference plot showing removed energy
-
 ## API Usage
-
-The tool can also be used as a Python library:
 
 ```python
 from beep_cleaner import BeepDetector, BeepRemover, CleanerConfig, visualize
@@ -236,16 +197,6 @@ python beep_cleaner_realtime.py -i 3 -o 5 --block-size 1024  # lower latency (~2
 | `--min-freq`    | 200     | Minimum detection frequency (Hz)  |
 | `--max-freq`    | 8000    | Maximum detection frequency (Hz)  |
 
-### How Real-Time Mode Works
-
-Unlike the file-based mode which uses multi-pass STFT analysis, the real-time mode is designed for per-block streaming:
-
-1. **Per-block FFT detection** — Each audio block (2048 samples / ~43ms) is analyzed with a windowed FFT. Spectral purity and energy ratio are computed to detect tonal content.
-2. **Beep confirmation** — A tone must persist for `min_beep_blocks` consecutive blocks (default: 2, ~86ms) to be confirmed as a beep, preventing false triggers on transient sounds.
-3. **Stateful IIR notch filters** — Once a beep is confirmed, cascaded IIR notch filters are applied using `scipy.signal.lfilter` with persistent filter states across blocks for seamless, click-free suppression.
-4. **Release hold** — After the beep ends, suppression continues for `release_blocks` (default: 3) to avoid cutting off abruptly.
-5. **Harmonic tracking** — Harmonics 2-5 are automatically filtered alongside the fundamental.
-
 ### Latency
 
 | Block Size | Latency at 48kHz | Latency at 44.1kHz |
@@ -264,6 +215,8 @@ Smaller blocks = lower latency but higher CPU usage and less frequency resolutio
 - Beeps overlapping in frequency with dominant speech content may cause slight artifacts in the surrounding audio at the beep frequency.
 - File mode: processing time scales with audio duration (~2-5 seconds per minute of audio).
 - Real-time mode: adds ~43ms latency (default block size). Detection requires ~86ms before suppression starts (2-block confirmation).
+
+For technical details on the algorithms, design decisions, and architecture, see [TECHNICAL.md](TECHNICAL.md).
 
 ## License
 
